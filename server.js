@@ -1,36 +1,23 @@
 const express = require('express');
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const path = require('path');
+
 const app = express();
-
-// Fayl BOSHIDA (require qatorlaridan keyin):
-const { Pool } = require('pg');
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-
-// Barcha mysql.createConnection → pool
-// Barcha connection.execute → pool.query
-
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// DB Config
-const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'career_advisor'
-};
+// PostgreSQL connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
-// Job bazasi
+// Jobs database
 const JOBS_DB = {
   frontend: [
     {title: "Frontend React Developer", url: "https://mohirdev.uz/jobs", company: "Mohirdev", salary: "5-12M", type: "Toshkent"},
@@ -66,32 +53,36 @@ app.post('/api/register', async (req, res) => {
     const {username, email, password} = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
     
-    const connection = await mysql.createConnection(dbConfig);
-    await connection.execute('INSERT INTO users (username, email, password) VALUES (?, ?, ?)', [username, email, hashedPassword]);
-    await connection.end();
+    const result = await pool.query(
+      'INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id',
+      [username, email, hashedPassword]
+    );
     
     res.json({message: 'Ro\'yxatdan o\'tdingiz!'});
   } catch (error) {
-    res.status(400).json({error: 'Xato yuz berdi!'});
+    res.status(400).json({error: 'Foydalanuvchi mavjud yoki xato!'});
   }
 });
 
 app.post('/api/login', async (req, res) => {
   try {
     const {email, password} = req.body;
-    const connection = await mysql.createConnection(dbConfig);
     
-    const [rows] = await connection.execute('SELECT * FROM users WHERE email = ?', [email]);
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     
-    if (rows.length === 0 || !await bcrypt.compare(password, rows[0].password)) {
-      await connection.end();
+    if (result.rows.length === 0) {
       return res.status(401).json({error: 'Noto\'g\'ri ma\'lumotlar!'});
     }
     
-    const token = jwt.sign({id: rows[0].id, username: rows[0].username}, 'secret123');
-    await connection.end();
+    const user = result.rows[0];
+    const validPassword = await bcrypt.compare(password, user.password);
     
-    res.json({token, user: rows[0]});
+    if (!validPassword) {
+      return res.status(401).json({error: 'Noto\'g\'ri ma\'lumotlar!'});
+    }
+    
+    const token = jwt.sign({id: user.id, username: user.username}, 'secret123');
+    res.json({token, user: {id: user.id, username: user.username, email: user.email}});
   } catch (error) {
     res.status(500).json({error: 'Server xatosi!'});
   }
@@ -99,10 +90,8 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
-    const connection = await mysql.createConnection(dbConfig);
-    const [rows] = await connection.execute('SELECT id, username, email FROM users WHERE id = ?', [req.user.id]);
-    await connection.end();
-    res.json(rows[0]);
+    const result = await pool.query('SELECT id, username, email FROM users WHERE id = $1', [req.user.id]);
+    res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({error: 'Xato!'});
   }
@@ -112,102 +101,77 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
 app.post('/api/career-advice', authenticateToken, (req, res) => {
   const {goal, experience, skills} = req.body;
   const advice = generateSmartAdvice(goal, experience, skills);
-  
   res.json({advice});
 });
 
 function generateSmartAdvice(goal, experience, skills) {
-  const keywords = skills.toLowerCase().split(',').map(s => s.trim());
-  let advice = `🤖 **SIZNING AI KARYERA MASLAHATCHINGIZ**\n\n`;
+  let advice = `🤖 **SIZNING AI KARYERA MASLAHATCHINGIZ**\n\n🎯 Maqsad: ${goal}\n📚 Tajriba: ${experience} yil\n⭐ Skills: ${skills}\n\n`;
   
-  if (goal.toLowerCase().includes('frontend') || keywords.some(k => k.includes('react'))) {
-    advice += `📱 **FRONTEND DEVELOPER uchun:\n`;
-  } else if (goal.toLowerCase().includes('backend') || keywords.some(k => k.includes('node'))) {
-    advice += `⚙️ **BACKEND DEVELOPER uchun:\n`;
-  } else {
-    advice += `🚀 **${goal.toUpperCase()} yo\'nalishi uchun:\n`;
+  if (goal.toLowerCase().includes('frontend')) {
+    advice += `📱 **FRONTEND DEVELOPER yo'l xaritasi:**\n`;
+    if (experience < 1) advice += `• FreeCodeCamp HTML/CSS/JS\n• YouTube React kursi\n• 3 ta portfolio loyihasi\n`;
+    else advice += `• Next.js o'rganing\n• TypeScript qo'shing\n• Open Source ishtirok\n`;
+  } else if (goal.toLowerCase().includes('backend')) {
+    advice += `⚙️ **BACKEND DEVELOPER yo'l xaritasi:**\n`;
+    if (experience < 1) advice += `• Node.js + Express\n• PostgreSQL/MySQL\n• REST API yaratish\n`;
+    else advice += `• NestJS o'rganing\n• Docker + CI/CD\n• Microservices\n`;
   }
   
-  if (experience < 1) {
-    advice += `- FreeCodeCamp.org da HTML/CSS/JS boshlang\n- YouTube: "Net Ninja" React kursi\n- GitHub profil yarating\n- 3 ta portfolio loyihasi qiling\n`;
-  } else if (experience < 3) {
-    advice += `- LeetCode easy/medium yeching\n- Open Source GitHub da hissa qo\'shing\n- LinkedIn da ingliz profil\n- AWS sertifikat oling\n`;
-  } else {
-    advice += `- System Design o\'rganing\n- Tech blog oching\n- Mentorlik boshlang\n- Konfranslarda gapiring\n`;
-  }
-  
+  advice += `\n🚀 **Keyingi qadam:** LinkedIn profil yangilang!`;
   return advice;
 }
 
 // Job Search
 app.post('/api/find-jobs', authenticateToken, (req, res) => {
-  const {goal, skills} = req.body;
+  const {goal} = req.body;
   const goalLower = goal.toLowerCase();
   
-  let matchedJobs = [];
-  if (goalLower.includes('frontend') || goalLower.includes('react')) {
-    matchedJobs = JOBS_DB.frontend;
-  } else if (goalLower.includes('backend') || goalLower.includes('node')) {
-    matchedJobs = JOBS_DB.backend;
-  } else if (goalLower.includes('fullstack')) {
-    matchedJobs = JOBS_DB.fullstack;
-  }
+  let matchedJobs = JOBS_DB.frontend;
+  if (goalLower.includes('backend')) matchedJobs = JOBS_DB.backend;
+  else if (goalLower.includes('fullstack')) matchedJobs = JOBS_DB.fullstack;
   
   res.json({jobs: matchedJobs.slice(0, 5)});
 });
 
 // Salary Calculator
 app.post('/api/salary-calculator', authenticateToken, (req, res) => {
-  const {role, experience, skills} = req.body;
-  const salary = calculateSalary(role, experience, skills);
-  res.json(salary);
-});
-
-function calculateSalary(role, experience, skills) {
+  const {role, experience} = req.body;
   let baseSalary = role === 'frontend' ? 6000000 : role === 'backend' ? 8000000 : 10000000;
   baseSalary += experience * 1000000;
   
-  if (skills.includes('react') || skills.includes('node')) baseSalary *= 1.3;
-  
-  return {
+  res.json({
     min: Math.round(baseSalary * 0.8 / 1000000) + 'M UZS',
     max: Math.round(baseSalary * 1.2 / 1000000) + 'M UZS',
-    usd: Math.round(baseSalary / 12600) + '$'
-  };
-}
+    usd: Math.round(baseSalary / 12600)
+  });
+});
 
 // Interview Questions
 app.post('/api/interview-question', authenticateToken, (req, res) => {
   const {role} = req.body;
-  const questions = getInterviewQuestions(role);
+  const frontendQuestions = [
+    "React da useEffect qachon ishlatiladi?",
+    "Virtual DOM nima?", "Flexbox vs Grid farqi?",
+    "Closure misolini keltiring", "Event bubbling?"
+  ];
+  const backendQuestions = [
+    "REST API vs GraphQL?", "JWT token qanday ishlaydi?",
+    "Database indexing nima?", "async/await vs Promise?"
+  ];
+  
+  const questions = role === 'frontend' ? frontendQuestions : backendQuestions;
   const randomQuestion = questions[Math.floor(Math.random() * questions.length)];
+  
   res.json({question: randomQuestion});
 });
 
-function getInterviewQuestions(role) {
-  const frontendQuestions = [
-    "React da useEffect qachon ishlatiladi?",
-    "Virtual DOM nima va u qanday ishlaydi?",
-    "Flexbox vs Grid farqi nima?",
-    "Closure misolini keltiring",
-    "Event bubbling va capturing?"
-  ];
-  
-  const backendQuestions = [
-    "REST API vs GraphQL farqi?",
-    "JWT token qanday ishlaydi?",
-    "Database indexing nima?",
-    "async/await vs Promise?",
-    "Middleware nima va qanday ishlatiladi?"
-  ];
-  
-  return role === 'frontend' ? frontendQuestions : backendQuestions;
-}
-
+// Serve frontend
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server ${PORT} da ishlamoqda`));
+app.listen(PORT, () => {
+  console.log(`✅ Server ${PORT} portda ishlamoqda`);
+});
 
