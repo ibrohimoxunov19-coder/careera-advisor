@@ -1,3 +1,23 @@
+async function initDatabase() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) NOT NULL,
+        email VARCHAR(150) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ DB tayyor!');
+  } catch (error) {
+    console.error('DB xatosi:', error);
+  }
+}
+
+// Server ishga tushganda
+initDatabase();
+
 const express = require('express');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
@@ -170,8 +190,13 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server ${PORT} portda ishlamoqda`);
 });
+app.listen(PORT, () => {
+  console.log(`✅ Server ${PORT} portda ishlamoqda`);
+});
+
 
