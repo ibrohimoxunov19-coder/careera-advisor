@@ -6,6 +6,18 @@ const cors = require('cors');
 const path = require('path');
 const app = express();
 
+// Fayl BOSHIDA (require qatorlaridan keyin):
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+// Barcha mysql.createConnection → pool
+// Barcha connection.execute → pool.query
+
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
@@ -198,3 +210,4 @@ app.get('*', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server ${PORT} da ishlamoqda`));
+
